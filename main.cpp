@@ -9,62 +9,28 @@
 // Required for most of open.mp.
 #include <sdk.hpp>
 
-// Include the vehicle component information.
-#include <Server/Components/Vehicles/vehicles.hpp>
+#include <iostream>
+#include <vector>
+#include <iomanip>
+#include <openssl/rand.h>
+#include <openssl/err.h>
+#include <openssl/crypto.h>
 
-// This should use an abstract interface if it is to be passed to other components.  Like the files
-// in `<Server/Components/>` you would share only this base class and keep the implementation
-// private.
-class BasicTemplate final : public IComponent, public PoolEventHandler<IVehicle>
+class SSLCompTest final : public IComponent, public PoolEventHandler<IVehicle>
 {
 private:
-	// Hold a reference to the main server core.
 	ICore* core_ = nullptr;
 	
-	// Hold a reference to the vehicle component so methods in it can be called.
-	IVehiclesComponent* vehicles_ = nullptr;
-
-	void updateVehicleCount()
-	{
-		for (INetwork* network : core_->getNetworks())
-		{
-			INetworkQueryExtension* query = queryExtension<INetworkQueryExtension>(network);
-			if (query)
-			{
-				query->addRule("vehicles", std::to_string(vehicles_->count()));
-			}
-		}
-	}
-
 public:
-	// Visit https://open.mp/uid to generate a new unique ID.
-	PROVIDE_UID(/* UID GOES HERE */);
+	PROVIDE_UID(0x5455F37DF06421A5);
 
-	// When this component is destroyed we need to tell any linked components this it is gone.
-	~BasicTemplate()
+	~SSLCompTest()
 	{
-		// Clean up what you did above.
-		if (vehicles_)
-		{
-			vehicles_->getPoolEventDispatcher().removeEventHandler(this);
-		}
-	}
-
-	// Implement the vehicle pool listener API.
-	void onPoolEntryCreated(IVehicle& entry) override
-	{
-		updateVehicleCount();
-	}
-
-	void onPoolEntryDestroyed(IVehicle& entry) override
-	{
-		updateVehicleCount();
 	}
 	
-	// Implement the main component API.
 	StringView componentName() const override
 	{
-		return "Basic Template";
+		return "SSL Component Test";
 	}
 
 	SemanticVersion componentVersion() const override
@@ -72,52 +38,94 @@ public:
 		return SemanticVersion(0, 0, 1, 0);
 	}
 
+	bool cryptoRandom(void* buffer, size_t length)
+	{
+		unsigned char* buf = static_cast<unsigned char*>(buffer);
+		do
+		{
+			if (1 == RAND_status())
+			{
+				if (1 == RAND_bytes_ex(nullptr, buf, length, 0))
+					return true;
+			}
+
+			const auto code = ERR_peek_last_error();
+			if (ERR_GET_LIB(code) == ERR_LIB_RAND)
+			{
+				const auto reason = ERR_GET_REASON(code);
+				if (reason == RAND_R_ERROR_INSTANTIATING_DRBG || reason == RAND_R_UNABLE_TO_FETCH_DRBG || reason == RAND_R_UNABLE_TO_CREATE_DRBG)
+				{
+					return false;
+				}
+			}
+		} while (1 == RAND_poll());
+
+		return false;
+	}
+
 	void onLoad(ICore* c) override
 	{
 		// Cache core, player pool here
 		core_ = c;
-		core_->printLn("Basic component template loaded.");
+		core_->printLn("SSL Component Test template loaded.");
+
+		// Initialize OpenSSL
+		OPENSSL_init_crypto(OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+
+		if (cryptoRandom(nullptr, 0))
+		{
+			std::cout << "works\n";
+		}
+		else
+		{
+			std::cout << "doesn't work aaa\n";
+		}
+
+		const int num_bytes = 32; // 256 bits
+		std::vector<unsigned char> random_bytes(num_bytes);
+
+		if (RAND_bytes(random_bytes.data(), num_bytes) != 1)
+		{
+			std::cerr << "Failed to generate random bytes: ";
+			ERR_print_errors_fp(stderr);
+			return;
+		}
+
+		std::cout << "Generated " << num_bytes << " random bytes: ";
+		for (unsigned char byte : random_bytes)
+		{
+			std::cout << std::hex << std::setw(2) << std::setfill('0')
+					  << static_cast<int>(byte);
+		}
+		std::cout << std::endl;
+
+		OPENSSL_cleanup();
 	}
 
 	void onInit(IComponentList* components) override
 	{
-		// Cache components, add event handlers here.
-		vehicles_ = components->queryComponent<IVehiclesComponent>();
-		if (vehicles_)
-		{
-			vehicles_->getPoolEventDispatcher().addEventHandler(this);
-		}
 	}
 
 	void onReady() override
 	{
-		// Fire events here at earliest.
-		updateVehicleCount();
 	}
 
 	void onFree(IComponent* component) override
 	{
-		// Invalidate vehicles_ pointer so it can't be used past this point.
-		if (component == vehicles_)
-		{
-			vehicles_ = nullptr;
-		}
 	}
 
 	void free() override
 	{
-		// Deletes the component.
 		delete this;
 	}
 
 	void reset() override
 	{
-		// Resets data when the mode changes.
 	}
 };
 
 // Automatically called when the compiled binary is loaded.
 COMPONENT_ENTRY_POINT()
 {
-	return new BasicTemplate();
+	return new SSLCompTest();
 }
